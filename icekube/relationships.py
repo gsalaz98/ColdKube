@@ -78,6 +78,12 @@ class Relationship:
     DEFINES: ClassVar[str] = "DEFINES"
     # Defines a reference to another object (e.g. Pod -> ServiceAccount)
     REFERENCES: ClassVar[str] = "REFERENCES"
+    # Directly consumes a resource (e.g. PersistentVolumeClaim -> PersistentVolume)
+    CONSUMES: ClassVar[str] = "CONSUMES"
+    # Indirectly consumes a resource, without an exclusive relationship to the refering node (e.g. PersistentVolume -> StorageClass)
+    USES: ClassVar[str] = "USES"
+    # Defines ownership of a resource (e.g. Deployment-[:OWNS]->ReplicaSet)
+    OWNS: ClassVar[str] = "OWNS"
 
     @staticmethod
     def generate_grant(verb: str, sub_resource: Optional[str]) -> str:

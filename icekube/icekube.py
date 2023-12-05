@@ -108,6 +108,11 @@ def relationship_generator(
                 dst_cmd, dst_kwargs = get(target, prefix="dst")
             elif isinstance(target, str):
                 dst_cmd, dst_kwargs = get(resource, prefix="dst")
+            elif target is None:
+                # Not found. Can happen inside new types
+                # where the relationship is not well defined
+                # or the cluster state hasn't been updated yet.
+                continue
             else:
                 dst_cmd = target[0].format(prefix="dst")
                 dst_kwargs = {f"dst_{key}": value for key, value in target[1].items()}

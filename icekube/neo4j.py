@@ -102,7 +102,7 @@ def find(
     **kwargs: str,
 ) -> Generator[BaseResource, None, None]:
     labels = [f"{key}: ${key}" for key in kwargs.keys()]
-    if resource is None or resource is BaseResource:
+    if resource is None:
         cmd = f"MATCH (x {{ {', '.join(labels)} }}) "
     else:
         cmd = f"MATCH (x:{resource.__name__} {{ {', '.join(labels)} }}) "

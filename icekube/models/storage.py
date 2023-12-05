@@ -4,47 +4,15 @@ import json
 from itertools import product
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, Union
+from icekube.models.resources import ResourceRequirements
 
 from icekube.relationships import Relationship
+from icekube.models._helpers import *
 from icekube.models.base import RELATIONSHIP, BaseResource, Resource
-from icekube.models.node import NodeSelector
-from icekube.models.objectreference import ObjectReference, SecretReference
+from icekube.models.node import LabelSelector, NodeSelector, TopologySelectorTerm
+from icekube.models.metadata import *
 from pydantic import BaseModel, Field, root_validator
 
-
-def build_default(kvp: Dict[str, Any], key: str, value: Optional[Any]) -> Resource:
-    kvp[key] = value
-    return kvp
-
-def build_default_resource(
-    kvp: BaseModel,
-    key: str,
-    objRef: Type[Resource],
-    value: Dict[str, Any]
-) -> Resource:
-    if value is not None:
-        kvp[key] = objRef(**value)
-    else:
-        kvp[key] = None
-
-    return kvp
-
-def build_default_toplevel_str(
-    values: BaseModel,
-    key: str,
-    spec: Dict[str, Any]
-) -> Resource:
-    build_default(values, key, spec.get(key))
-    return values
-
-def build_default_toplevel_resource(
-    cls: Type[Resource],
-    key: str,
-    values: BaseModel,
-    spec: Dict[str, Any]
-) -> Resource:
-    build_default_resource(values, key, cls, spec.get(key))
-    return values
 
 class AWSElasticBlockSourceVolumeSource(BaseResource):
     apiVersion: str = "v1"
@@ -127,7 +95,7 @@ class CSIPersistentVolumeSource(BaseResource):
     nodePublishSecretRef: Optional[Union[SecretReference, str]] = None
     nodeStageSecretRef: Optional[Union[SecretReference, str]] = None
     readOnly: Optional[bool] = None
-    volumeAttributes: Dict[str, Any] = {}
+    volumeAttributes: Optional[Union[Dict[str, Any], str]] = {}
     volumeHandle: Optional[str] = None
 
     @root_validator(pre=True)
@@ -135,10 +103,7 @@ class CSIPersistentVolumeSource(BaseResource):
         spec = json.loads(values.get("raw", "{}")).get("spec", {})
 
         volumeAttributes = spec.get("volumeAttributes", {})
-        if volumeAttributes is not None and isinstance(volumeAttributes, str):
-            volumeAttributes = json.loads(volumeAttributes)
-
-        values["volumeAttributes"] = volumeAttributes
+        values["volumeAttributes"] = json.dumps(volumeAttributes)
         return values
 
     @property
@@ -373,7 +338,50 @@ class VsphereVirtualDiskVolumeSource(BaseResource):
     storagePolicyName: Optional[str] = None
     volumePath: Optional[str] = None
 
+class StorageClass(Resource):
+    allowVolumeExpansion: Optional[bool] = None
+    allowedTopologies: Optional[List[TopologySelectorTerm]] = None
+
+    apiVersion: Optional[str] = None
+    kind: Optional[str] = None
+    metadata: Optional[ObjectMeta] = None
+    mountOptions: Optional[List[str]] = None
+    provisioner: Optional[str] = None
+    reclaimPolicy: Optional[str] = None
+    volumeBindingMode: Optional[str] = None
+
+    @root_validator(pre=True)
+    def extract_fields(cls, values):
+        metadata = json.loads(values.get("raw", "{}")).get("metadata", {})
+        spec = json.loads(values.get("raw", "{}")).get("spec", {})
+
+        values["metadata"] = mock(ObjectMeta, **metadata)
+        values["allowedTopologies"] = [mock(TopologySelectorTerm, **i) for i in spec.get("allowedTopologies", [])]
+
+        return values
+    
+    @property
+    def db_labels(self) -> Dict[str, Any]:
+        labels = {
+            k: (v["objHash"] if v is not None and "objHash" in v else [
+                i["objHash"] if i is not None and "objHash" in i else i for i in v
+                ] if isinstance(v, list) else v
+                ) for k, v in self.model_dump().items()
+        }
+
+        return labels
+    
+    @property
+    def referenced_objects(self):
+        return [
+            self.metadata,
+            *self.allowedTopologies
+        ]
+    
+
 class PersistentVolume(Resource):
+    __name__ = "PersistentVolume"
+
     apiVersion: str = "v1"
     kind: str = "PersistentVolume"
 
@@ -493,5 +501,89 @@ class PersistentVolume(Resource):
         return objects
     
     def relationships(self, initial: bool = True) -> List[RELATIONSHIP]:
-        # I don't know how to make this work via inheritance, so we're copy and pasting it around for now
-        return [(self, Relationship.DEFINES, i) for i in self.referenced_objects if i is not None]
+        from icekube.neo4j import find
+
+        relationships = [(self, Relationship.DEFINES, i) for i in self.referenced_objects if i is not None]
+        storageclasses = list(find(StorageClass, raw=False, name=self.storageClassName))
+        if len(storageclasses) > 0:
+            storageclass = storageclasses[0]
+            relationships.append((self, Relationship.USES, storageclass))
+
+        return relationships
+
+
+class PersistentVolumeClaim(Resource):
+    apiVersion: str = "v1"
+    kind: str = "PersistentVolumeClaim"
+
+    accessModes: Optional[List[str]] = None
+    dataSource: Optional[Union[TypedLocalObjectReference, str]] = None
+    dataSourceRef: Optional[Union[TypedObjectReference, str]] = None
+    resources: Optional[ResourceRequirements] = None
+    labelSelector: Optional[LabelSelector] = None
+    storageClassName: Optional[str] = None
+    volumeName: Optional[str] = None
+    volumeMode: Optional[str] = None
+
+    @root_validator(pre=True)
+    def extract_fields(cls, values):
+        spec = json.loads(values.get("raw", "{}")).get("spec", {})
+
+        values = build_default_toplevel_resource(TypedLocalObjectReference, "dataSource", values, spec)
+        values = build_default_toplevel_resource(TypedObjectReference, "dataSourceRef", values, spec)
+        values = build_default_toplevel_resource(ResourceRequirements, "resources", values, spec)
+        values = build_default_toplevel_resource(LabelSelector, "labelSelector", values, spec)
+
+        values["accessModes"] = spec.get("accessModes")
+        values["storageClassName"] = spec.get("storageClassName")
+        values["volumeName"] = spec.get("volumeName")
+        values["volumeMode"] = spec.get("volumeMode")
+
+        return values
+
+    @property
+    def db_labels(self) -> Dict[str, Any]:
+        return {
+            **super().db_labels,
+            **{k: (v["objHash"] if v is not None and "objHash" in v else json.dumps(v) if isinstance(v, dict) else v) for k, v in self.model_dump().items()}
+        }
+    
+    @property
+    def referenced_objects(self):
+        objects = [
+            self.dataSource,
+            self.dataSourceRef,
+            self.resources,
+            self.labelSelector
+        ]
+        return objects
+
+    def relationships(self, initial: bool = True) -> List[RELATIONSHIP]:
+        from icekube.neo4j import find
+
+        # Find the PersistentVolume that this PersistentVolumeClaim is bound to
+        results = list(find(
+            PersistentVolume, 
+            raw=False, 
+            apiVersion="v1",
+            kind="PersistentVolume",
+            name=self.volumeName
+        ))
+
+        relationships = []
+
+        if len(results) != 0:
+            pv = results[0]
+            relationships += [
+                (self, Relationship.BOUND_TO, pv),
+                (self, Relationship.CONSUMES, pv) 
+            ]
+
+        relationships += [
+            (self, Relationship.DEFINES, self.dataSource),
+            (self, Relationship.DEFINES, self.dataSourceRef),
+            (self, Relationship.DEFINES, self.resources),
+            (self, Relationship.DEFINES, self.labelSelector),
+        ]
+
+        return relationships

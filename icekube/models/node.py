@@ -1,8 +1,49 @@
 from __future__ import annotations
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
 
 from icekube.models.base import BaseResource, Resource
 
+
+class TopologySelectorLabelRequirement(BaseResource):
+    apiVersion: str = "v1"
+    kind: str = "TopologySelectorLabelRequirement"
+
+    key: str
+    values: List[str]
+
+    @property
+    def db_labels(self):
+        return self.model_dump()
+
+class TopologySelectorTerm(BaseResource):
+    apiVersion: str = "v1"
+    kind: str = "TopologySelectorTerm"
+
+    matchLabelExpressions: Optional[TopologySelectorLabelRequirement] = None
+
+    @property
+    def db_labels(self):
+        return {
+            "matchLabelExpressions": self.matchLabelExpressions.objHash
+        }
+    
+    @property
+    def referenced_objects(self):
+        return [
+            self.matchLabelExpressions
+        ]
+
+class LabelSelectorRequirement(BaseResource):
+    apiVersion: str = "v1"
+    kind: str = "LabelSelectorRequirement"
+
+    key: str
+    operator: str
+    values: List[str]
+
+class LabelSelector(BaseResource):
+    matchExpressions: Optional[LabelSelectorRequirement] = None
+    matchLabels: Optional[Union[Dict[str, str], str]] = None
 
 class NodeSelectorRequirement(BaseResource):
     apiVersion: str = "v1"

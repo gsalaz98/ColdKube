@@ -20,6 +20,9 @@ class ResourceDecoder(JSONEncoder):
         if isinstance(obj, BaseModel):
             return obj.model_dump()
 
+        if not hasattr(obj, "__dict__"):
+            return obj
+        
         return obj.__dict__
 
 class BaseResource(BaseModel):
@@ -90,10 +93,17 @@ class BaseResource(BaseModel):
     
     @property
     def db_labels(self):
-        return {
-            k: (v["objHash"] if v is not None and "objHash" in v else json.dumps(v) if isinstance(v, dict) else v) 
-            for k, v in self.model_dump().items()
+        labels = {
+            k: (v["objHash"] if v is not None and "objHash" in v else [
+                i["objHash"] if i is not None and "objHash" in i else i for i in v
+                ] if isinstance(v, list) else v
+                ) for k, v in self.model_dump().items()
         }
+
+        if self.kind is None:
+            labels["kind"] = self.__class__.__name__
+
+        return labels
     
     @property
     def referenced_objects(self):
