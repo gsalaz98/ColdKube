@@ -147,6 +147,7 @@ def api_resources() -> List[APIResource]:
 
 def all_resources(
     preferred_versions_only: bool = True,
+    match_resource: Optional[str] = None,
     ignore: Optional[List[str]] = None,
 ) -> Iterator[Resource]:
     load_kube_config()
@@ -167,6 +168,9 @@ def all_resources(
             continue
 
         if resource_kind.name in ignore:
+            continue
+
+        if match_resource is not None and match_resource != resource_kind.name:
             continue
 
         logger.info(f"Fetching {resource_kind.name} resources")

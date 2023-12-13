@@ -5,7 +5,6 @@ from typing import List
 
 from icekube.models.base import RELATIONSHIP, Resource
 from icekube.models.secret import Secret
-from icekube.neo4j import mock
 from icekube.relationships import Relationship
 from pydantic import root_validator
 from pydantic.fields import Field
@@ -26,10 +25,9 @@ class ServiceAccount(Resource):
 
         for secret in data.get("secrets", []):
             values["secrets"].append(
-                mock(
-                    Secret,
+                Secret(
                     name=secret.get("name", ""),
-                    namespace=data.get("metadata", {}).get("namespace", ""),
+                    namespace=data.get("metadata", {}).get("namespace", "")
                 ),
             )
 

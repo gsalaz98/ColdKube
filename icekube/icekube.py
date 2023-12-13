@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import List, Optional
 
+from icekube.config import config
 from icekube.attack_paths import attack_paths
 from icekube.kube import (
     all_resources,
@@ -13,6 +14,7 @@ from icekube.kube import (
 from icekube.models import Cluster, Signer
 from icekube.models.base import BaseResource, Resource
 from icekube.neo4j import create, find, get, get_driver
+from icekube.utils import get_nested_resources
 from neo4j import BoltDriver
 from tqdm import tqdm
 
@@ -59,34 +61,17 @@ def enumerate_resource_kind(
             cmd, kwargs = create(s)
             session.run(cmd, **kwargs)
 
-        for resource in all_resources(ignore=ignore):
+        match_resource = config.get("match_resource")
+        match_resource = match_resource if match_resource is not None and match_resource != "" else None
+
+        for resource in all_resources(match_resource=match_resource, ignore=ignore):
             cmd, kwargs = create(resource)
             session.run(cmd, **kwargs)
 
-            current = resource
-            next_recurse = []
-
-            if hasattr(current, "referenced_objects"):
-                next_recurse.extend(current.referenced_objects)
-
-            # Recurse into nested objects and calls out to
-            # neo4j to create the object if it doesn't exist
-            while len(next_recurse) > 0:
-                next_objs = []
-                for obj in next_recurse:
-                    if obj is None:
-                        # Will happen when a resource that can contain
-                        # a nested object didn't have it specified
-                        continue
-
-                    if hasattr(obj, "referenced_objects"):
-                        next_objs.extend(obj.referenced_objects)
-
-                    cmd, kwargs = create(obj)
-                    session.run(cmd, **kwargs)
-
-                next_recurse = next_objs
-
+            nested_resources = get_nested_resources(resource)
+            for nested_resource in nested_resources:
+                cmd, kwargs = create(nested_resource)
+                session.run(cmd, **kwargs)
 
 def relationship_generator(
     driver: BoltDriver,
@@ -95,6 +80,7 @@ def relationship_generator(
 ):
     with driver.session() as session:
         logger.info(f"Generating relationships for {resource}")
+
         for source, relationship, target in resource.relationships(initial):
             if isinstance(source, (BaseResource, Resource)):
                 src_cmd, src_kwargs = get(source, prefix="src")
@@ -148,6 +134,9 @@ def generate_relationships(threaded: bool = False, pass_total: int = 2) -> None:
             print(f"Generating relationships ({pass_num}/{pass_total})")
             for resource in tqdm(resources):
                 generator(resource)
+                for nested_resource in get_nested_resources(resource):
+                    generator(nested_resource)
+
             print("")
 
 

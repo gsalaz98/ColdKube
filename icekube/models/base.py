@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import traceback
+from collections.abc import Mapping
 from json import JSONEncoder
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
@@ -14,6 +15,12 @@ from pydantic import BaseModel, Field, root_validator
 
 logger = logging.getLogger(__name__)
 
+def class_defines_relationships(resource: BaseResource) -> List[RELATIONSHIP]:
+    return [
+        (resource, Relationship.DEFINES, i)
+        for i in resource.referenced_objects
+        if i is not None
+    ]
 
 class ResourceDecoder(JSONEncoder):
     def default(self, obj):
@@ -27,23 +34,24 @@ class ResourceDecoder(JSONEncoder):
 
 
 class BaseResource(BaseModel):
-    apiVersion: str = Field(default=...)
-    kind: str = Field(default=...)
     objHash: Optional[str] = Field(default=None)
 
     def __new__(cls, **kwargs):
         kind_class = cls.get_kind_class(
             kwargs.get("apiVersion", ""),
-            kwargs.get("corekind", kwargs.get("kind", cls.__name__)),
+            kwargs.get("kind", cls.__name__),
         )
         return super(BaseResource, kind_class).__new__(kind_class)
 
     def __repr__(self) -> str:
-        if self.objHash is not None:
-            return (
-                f'{self.kind}(apiVersion="{self.apiVersion}", objHash="{self.objHash}")'
-            )
-        return f'{self.kind}(apiVersion="{self.apiVersion}")'
+        kind = self.__name__ if hasattr(self, "__name__") else self.__class__.__name__
+        labels = self.db_labels
+        if "raw" in labels:
+            del labels["raw"]
+        quot = '"'
+        kvp = ','.join(['='.join([k, f'"{v.strip(quot)}"']) for k, v in labels.items() if isinstance(v, str)])
+
+        return f'{kind}({kvp})'
 
     def __str__(self) -> str:
         return self.__repr__()
@@ -56,9 +64,11 @@ class BaseResource(BaseModel):
             # and when deserializing, we think that the value stored
             # in neo4j is a struct, but actually is a hash value.
             from icekube.neo4j import find
-
             found = list(find(type(cls), raw=False, **{"objHash": values}))
             return found[0].model_dump() if len(found) > 0 else values
+        
+        if isinstance(values, list):
+            return [cls.inject_object_hash(x) for x in values]
 
         if "objHash" not in values or values["objHash"] is None:
             jsonObj = json.dumps(values, cls=ResourceDecoder)
@@ -76,74 +86,58 @@ class BaseResource(BaseModel):
             return cls
 
     @property
-    def api_group(self) -> str:
-        if "/" in self.apiVersion:
-            return self.apiVersion.split("/")[0]
-        else:
-            # When the base APIGroup is ""
-            return ""
-
-    @property
-    def unique_identifiers(self) -> Dict[str, str]:
-        return {
-            "apiGroup": self.api_group,
-            "apiVersion": self.apiVersion,
-            "kind": self.kind,
-            "objHash": self.objHash if self.objHash is not None else "",
-        }
-
-    @property
     def db_labels(self):
         labels = {
             k: (
                 v["objHash"]
-                if v is not None and "objHash" in v
+                if v is not None and isinstance(v, Mapping) and "objHash" in v
                 else [
                     i["objHash"] if i is not None and "objHash" in i else i for i in v
                 ]
                 if isinstance(v, list)
+                else json.dumps(v) if isinstance(v, dict)
                 else v
             )
             for k, v in self.model_dump().items()
         }
 
-        if self.kind is None:
-            labels["kind"] = self.__class__.__name__
-
         return labels
+    
+    @property
+    def unique_identifiers(self) -> Dict[str, str]:
+        return {k:v for k, v in self.db_labels.items() if v is not None}
 
     @property
     def referenced_objects(self) -> List[Optional[BaseResource]]:
-        return []
+        return {
+            k: v for k, v in self.model_dump().items() if isinstance(v, BaseResource)
+        }
 
     def relationships(self, initial: bool = True) -> List[RELATIONSHIP]:
-        return [
-            (self, Relationship.DEFINES, i)
-            for i in self.referenced_objects
-            if i is not None
-        ]
-
+        return class_defines_relationships(self)
 
 class Resource(BaseResource):
+    apiVersion: str = Field(default=...)
+    kind: str = Field(default=...)
     name: str = Field(default=...)
     plural: str = Field(default=...)
     namespace: Optional[str] = Field(default=None)
     raw: Optional[str] = Field(default=None)
 
-    def __repr__(self) -> str:
-        if self.namespace:
-            return f"{self.kind}(namespace='{self.namespace}', name='{self.name}')"
-        else:
-            return f"{self.kind}(name='{self.name}')"
-
-    def __str__(self) -> str:
-        return self.__repr__()
+    #def __repr__(self) -> str:
+    #    if self.namespace:
+    #        return f"{self.kind}(namespace='{self.namespace}', name='{self.name}')"
+    #    else:
+    #        return f"{self.kind}(name='{self.name}')"
+    #
+    #def __str__(self) -> str:
+    #    return self.__repr__()
 
     def __eq__(self, other) -> bool:
         comparison_points = ["apiVersion", "kind", "namespace", "name"]
 
         return all(getattr(self, x) == getattr(other, x) for x in comparison_points)
-
+    
     @root_validator(pre=True)
     def inject_missing_required_fields(cls, values):
         if not all(x in values for x in ["apiVersion", "kind", "plural"]):
@@ -198,6 +192,22 @@ class Resource(BaseResource):
             return subclasses[kind]
         except KeyError:
             return cls
+        
+    @property
+    def unique_identifiers(self) -> Dict[str, str]:
+        return {
+            "apiGroup": self.api_group,
+            "apiVersion": self.apiVersion,
+            "kind": self.kind
+        }
+        
+    @property
+    def api_group(self) -> str:
+        if "/" in self.apiVersion:
+            return self.apiVersion.split("/")[0]
+        else:
+            # When the base APIGroup is ""
+            return ""
 
     @property
     def resource_definition_name(self) -> str:
@@ -213,7 +223,6 @@ class Resource(BaseResource):
             "apiVersion": self.apiVersion,
             "kind": self.kind,
             "name": self.name,
-            "objHash": self.objHash if self.objHash is not None else "",
         }
         if self.namespace:
             ident["namespace"] = self.namespace
@@ -283,7 +292,7 @@ class Resource(BaseResource):
                         namespace=item["metadata"]["namespace"] if namespace else None,
                         plural=name,
                         raw=json.dumps(item, default=str),
-                    ),
+                    )
                 )
             except Exception:
                 logger.error(

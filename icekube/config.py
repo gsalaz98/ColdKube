@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import Optional, TypedDict
 
 
 class Neo4j(TypedDict):
@@ -10,6 +10,7 @@ class Neo4j(TypedDict):
 
 class Config(TypedDict):
     neo4j: Neo4j
+    match_resource: Optional[str]
 
 
 config: Config = {
@@ -19,4 +20,5 @@ config: Config = {
         "password": "neo4j",
         "encrypted": False,
     },
+    "match_resource": None
 }

@@ -14,7 +14,7 @@ from typing import (
 )
 
 from icekube.config import config
-from icekube.models import BaseResource, Cluster, Resource
+from icekube.models import *
 from neo4j import BoltDriver, GraphDatabase
 from neo4j.io import ServiceUnavailable
 
@@ -36,13 +36,15 @@ def get_driver() -> BoltDriver:
 
 
 def get_resource_kind(resource: Union[BaseResource, Type[BaseResource]]) -> str:
-    kind = resource.__class__.__name__ if type(resource) != type else resource.__name__
-    if type(resource) == Resource or type(resource) == BaseResource:
-        # If directly one of the base classes, use the kind from the API
-        kind = resource.kind
+    if hasattr(resource, "__name__"):
+        # If an instance, use the kind from the instance
+        return resource.__name__
 
-    return kind
-
+    if isinstance(resource, Resource):
+        return resource.kind
+    
+    # If a type, use the kind from the type
+    return resource.__class__.__name__
 
 def init_connection(
     uri: str = "bolt://localhost:7687",
@@ -107,7 +109,6 @@ def create(resource: BaseResource, prefix: str = "") -> Tuple[str, Dict[str, Any
         kwargs[f"{prefix}{key}"] = value
 
     cmd += f"SET x += {{ {', '.join(labels)} }} "
-
     return cmd, kwargs
 
 
@@ -129,6 +130,8 @@ def find(
     cmd += "RETURN x"
 
     driver = get_driver()
+    match_resource = config.get("match_resource", None)
+    match_resource = match_resource if match_resource != "" else None
 
     with driver.session() as session:
         logger.debug(f"Starting neo4j query: {cmd}, {kwargs}")

@@ -160,12 +160,14 @@ def callback(
     neo4j_user: str = typer.Option("neo4j", show_default=True),
     neo4j_password: str = typer.Option("neo4j", show_default=True),
     neo4j_encrypted: bool = typer.Option(False, show_default=True),
+    match_resource: str = typer.Option("", show_default=True),
     verbose: int = typer.Option(0, "--verbose", "-v", count=True),
 ):
     config["neo4j"]["url"] = neo4j_url
     config["neo4j"]["username"] = neo4j_user
     config["neo4j"]["password"] = neo4j_password
     config["neo4j"]["encrypted"] = neo4j_encrypted
+    config["match_resource"] = match_resource
 
     verbosity_levels = {
         0: logging.ERROR,

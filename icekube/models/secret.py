@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, List, Optional, cast
 
-from icekube.models.base import RELATIONSHIP, Resource
-from icekube.neo4j import mock
+from icekube.models.base import RELATIONSHIP, BaseResource, Resource
+from icekube.models.metadata import ObjectMeta
 from icekube.relationships import Relationship
 from pydantic import root_validator
 
 
 class Secret(Resource):
-    secret_type: str
-    annotations: Dict[str, Any]
+    __name__ = "Secret"
+
+    name: Optional[str] = None
+
+    metadata: Optional[ObjectMeta] = None
+    immutable: Optional[bool] = None
+    type: Optional[str] = None
 
     @root_validator(pre=True)
     def remove_secret_data(cls, values):
@@ -20,35 +25,19 @@ class Secret(Resource):
             del data["data"]
 
         values["raw"] = json.dumps(data)
-
-        return values
-
-    @root_validator(pre=True)
-    def extract_type(cls, values):
-        data = json.loads(values.get("raw", "{}"))
-        values["secret_type"] = data.get("type", "")
-
-        return values
-
-    @root_validator(pre=True)
-    def extract_annotations(cls, values):
-        data = json.loads(values.get("raw", "{}"))
-        values["annotations"] = data.get("metadata", {}).get("annotations") or {}
-
         return values
 
     def relationships(self, initial: bool = True) -> List[RELATIONSHIP]:
         relationships = super().relationships()
 
-        if self.secret_type == "kubernetes.io/service-account-token":
+        if self.type == "kubernetes.io/service-account-token":
             from icekube.models.serviceaccount import ServiceAccount
 
-            sa = self.annotations.get("kubernetes.io/service-account.name")
+            sa = self.metadata.annotations.get("kubernetes.io/service-account.name")
             if sa:
-                account = mock(
-                    ServiceAccount,
-                    name=sa,
-                    namespace=cast(str, self.namespace),
+                account = ServiceAccount(
+                    name=sa, 
+                    namespace=self.namespace
                 )
                 relationships.append(
                     (
@@ -59,3 +48,20 @@ class Secret(Resource):
                 )
 
         return relationships
+
+class EnvVar(BaseResource):
+    __name__ = "EnvVar"
+
+    name: Optional[str] = None
+    value: Optional[str] = None
+    valueFrom: Optional[Secret] = None
+
+    @root_validator(pre=True)
+    def extract_values(cls, values):
+        try:
+            if "valueFrom" in values:
+                values["valueFrom"] = Secret(**values["valueFrom"])
+            return values
+        except Exception as e:
+            print(e)
+            exit(1)
